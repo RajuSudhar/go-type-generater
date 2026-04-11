@@ -1,23 +1,55 @@
----
-ref: pipeline
-load_when: editing parser/resolver/generator, tracing data flow, debugging end-to-end
----
+# Pipeline
 
-# Pipeline (3 stages)
+3-stage OpenAPI → Go type generation pipeline.
 
-1. **Parse** — `src/parser/openapi-parser.ts`
-   - YAML/JSON read · validates OpenAPI 3.0/3.1 · delegates $ref to resolver
-2. **Resolve** — `src/resolver/reference-resolver.ts`
-   - Recursive $ref (internal `#/components/...` + external `./x.yaml#/Y`)
-   - Cache by abs path · `resolving` Set for cycles · max depth 10
-   - External paths resolved relative to base doc dir
-3. **Generate** — `src/generator/go-generator.ts`
-   - Schema → Go types · organizes files · writes output
+## Stages
+
+```
+YAML/JSON input
+  │
+  ▼
+┌─────────────────────────────────────────┐
+│ 1. PARSE — src/parser/openapi-parser.ts │
+│    js-yaml load · validate 3.0/3.1      │
+│    delegate $ref → resolver             │
+├─────────────────────────────────────────┤
+│ 2. RESOLVE — src/resolver/reference-    │
+│    resolver.ts                          │
+│    internal #/components/schemas/X      │
+│    external ./file.yaml#/path           │
+│    cache: Map<absPath, doc>             │
+│    cycle: resolving Set → stub          │
+│    depth: max 10 (configurable)         │
+├─────────────────────────────────────────┤
+│ 3. GENERATE — src/generator/            │
+│    go-generator.ts                      │
+│    schema → GoStruct/GoEnum/GoType      │
+│    organize → files per --grouping      │
+│    render via src/templates/             │
+│    emit go.mod + main.go                │
+└─────────────────────────────────────────┘
+  │
+  ▼
+output/ (*.go + go.mod + main.go)
+```
 
 ## Entry Points
-- Programmatic: `src/index.ts`
-- CLI: `src/cli.ts` → `bin/go-type-gen.js`
-- Package main: `dist/index.js`
+
+| Entry | File | Purpose |
+|---|---|---|
+| Programmatic | `src/index.ts` | All public exports |
+| CLI | `src/cli.ts` → `bin/go-type-gen.js` | User-facing command |
+| Package main | `dist/index.js` | npm consumption |
+
+## Error Types (`src/errors.ts`)
+
+| Error | Thrown When |
+|---|---|
+| `CircularReferenceError` | `$ref` A→B→A detected |
+| `MaxDepthExceededError` | Object traversal > maxDepth |
+| `UnresolvedReferenceError` | `$ref` path/file not found |
+| `ParseError` | YAML/JSON parse failure |
 
 ## Deps
+
 `commander` · `js-yaml` · `openapi-types` · `chalk`
