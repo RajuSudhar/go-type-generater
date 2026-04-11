@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.tgz
+.DS_Store
+
+# Generated examples
+examples/output*/
+examples/output-with-decoders/tests/.tmp-output/

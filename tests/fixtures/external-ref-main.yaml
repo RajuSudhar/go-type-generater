@@ -1,0 +1,16 @@
+openapi: 3.0.3
+info:
+  title: External Ref Test
+  version: 1.0.0
+
+components:
+  schemas:
+    Order:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: integer
+        status:
+          $ref: './external-ref-status.yaml#/OrderStatus'

@@ -1,0 +1,137 @@
+openapi: 3.0.3
+info:
+  title: Simple API
+  version: 1.0.0
+  description: A simple API for testing Go type generation
+
+components:
+  schemas:
+    User:
+      type: object
+      required:
+        - id
+        - name
+        - email
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Unique identifier for the user
+        name:
+          type: string
+          description: Full name of the user
+        email:
+          type: string
+          format: email
+          description: Email address of the user
+        age:
+          type: integer
+          minimum: 0
+          maximum: 150
+        isActive:
+          type: boolean
+          description: Whether the user account is active
+        createdAt:
+          type: string
+          format: date-time
+          description: When the user account was created
+        tags:
+          type: array
+          items:
+            type: string
+          description: List of tags associated with the user
+
+    Product:
+      type: object
+      required:
+        - id
+        - name
+        - price
+      properties:
+        id:
+          type: string
+          description: Unique product identifier
+        name:
+          type: string
+          description: Product name
+        description:
+          type: string
+          description: Product description
+        price:
+          type: number
+          format: double
+          minimum: 0
+        category:
+          $ref: '#/components/schemas/Category'
+        inStock:
+          type: boolean
+          default: true
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional product metadata
+
+    Category:
+      type: string
+      enum:
+        - electronics
+        - clothing
+        - books
+        - food
+        - other
+      description: Product category
+
+    OrderStatus:
+      type: string
+      enum:
+        - pending
+        - confirmed
+        - shipped
+        - delivered
+        - cancelled
+      description: Current status of an order
+
+    CreateUserRequest:
+      type: object
+      required:
+        - name
+        - email
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        age:
+          type: integer
+          minimum: 0
+          maximum: 150
+
+    UserResponse:
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          properties:
+            profileUrl:
+              type: string
+              format: uri
+
+    ApiError:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+          description: Error code
+        message:
+          type: string
+          description: Error message
+        details:
+          type: array
+          items:
+            type: string
+          description: Additional error details

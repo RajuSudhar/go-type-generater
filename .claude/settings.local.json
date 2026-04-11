@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build)",
+      "Bash(npm run generate -- examples/simple-api.yaml examples/output-with-decoders --verbose --generate-validation)",
+      "Bash(node /Users/sudharsan.r/Desktop/projects/go-type-generater/bin/go-type-gen.js examples/simple-api.yaml examples/output-with-decoders --verbose --generate-validation)",
+      "Bash(node bin/go-type-gen.js examples/simple-api.yaml examples/output-with-decoders --verbose --generate-validation)",
+      "Bash(npm link)",
+      "Bash(go-type-gen --help)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

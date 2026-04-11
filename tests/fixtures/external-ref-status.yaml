@@ -1,0 +1,6 @@
+OrderStatus:
+  type: string
+  enum:
+    - pending
+    - shipped
+    - delivered
