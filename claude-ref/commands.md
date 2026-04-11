@@ -1,25 +1,33 @@
----
-ref: commands
-load_when: running build/test/lint/format, using CLI
----
-
 # Commands
 
+Build/test/lint/format commands and CLI reference for go-type-generater.
+
 ## Dev
-- `pnpm build` → TS → `dist/`
-- `pnpm dev <in> <out>` → run via ts-node
-- `pnpm test` · `pnpm lint` · `pnpm format`
+
+| Command | Action |
+|---|---|
+| `pnpm build` | TS → `dist/` |
+| `pnpm dev <in> <out>` | Run via ts-node (no build) |
+| `pnpm test` | Jest (115 tests) |
+| `pnpm lint` | ESLint `src/**/*.ts` |
+| `pnpm format` | Prettier `src/**/*.ts` |
 
 ## CLI
-`node bin/go-type-gen.js <input> <output> [opts]`
 
-| Flag | Values | Purpose |
-|---|---|---|
-| `-p, --package-name` | string | Go package |
-| `-g, --grouping` | `category`\|`single`\|`custom` | File layout |
-| `-v, --verbose` | — | Verbose logs |
-| `-f, --format` | `yaml`\|`json`\|`auto` | Input fmt |
-| `--version` | `3.0`\|`3.1`\|`auto` | OpenAPI ver |
+```
+node bin/go-type-gen.js <input> <output> [opts]
+```
+
+| Flag | Type | Default | Purpose |
+|---|---|---|---|
+| `-p, --package-name` | string | dir basename | Go package name |
+| `-g, --grouping` | `category\|single\|custom` | `category` | File layout strategy |
+| `-v, --verbose` | bool | `false` | Verbose logs |
+| `-f, --format` | `yaml\|json\|auto` | `auto` | Input format override |
+| `--version` | `3.0\|3.1\|auto` | `auto` | OpenAPI version pin |
+| `--generate-decoders` | bool | `true` | Emit `parse<Type>()` decoders |
+| `--generate-validation` | bool | `false` | Emit validator tags + init |
 
 ## TS Config
-ES2020 · CommonJS · strict · out `dist/` · src `src/` (excl `**/*.test.ts`)
+
+ES2020 · CommonJS · strict · `outDir: dist/` · `rootDir: src/` · excludes `**/*.test.ts`

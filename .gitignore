@@ -1,9 +1,48 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 *.tsbuildinfo
-*.tgz
-.DS_Store
 
-# Generated examples
+# Package artifacts
+*.tgz
+*.tar.gz
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE / Editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Test artifacts
+tests/.tmp-output/
+coverage/
+*.lcov
+
+# Generated example output
 examples/output*/
-examples/output-with-decoders/tests/.tmp-output/
+examples/output-with-decoders/
+
+# Debug logs
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime
+*.pid
+*.seed
+*.pid.lock
