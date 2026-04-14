@@ -8,6 +8,8 @@ import {
   GoEnum,
   GoField,
   GoDecoder,
+  GoUnion,
+  GoUnionVariant,
   toGoTypeName,
   toGoFieldName,
   toParserFunctionName,
@@ -22,7 +24,8 @@ import {
   generateGoModTemplate,
   generateMainExportTemplate,
   generateDecoderTemplate,
-  generateDecoderHelpersTemplate
+  generateDecoderHelpersTemplate,
+  generateUnionTemplate
 } from '../templates/go-templates';
 
 export interface GeneratorOptions {
@@ -161,9 +164,9 @@ export class GoGenerator {
       return this.createGoStructFromAllOf(goTypeName, schema as SchemaObject & { allOf: any[] }, allSchemas, dependencies);
     }
 
-    // Handle oneOf/anyOf (interfaces)
+    // Handle oneOf/anyOf (sum types / discriminated unions)
     if (('oneOf' in schema && schema.oneOf) || ('anyOf' in schema && schema.anyOf)) {
-      return this.createGoInterface(goTypeName, schema);
+      return this.createGoUnion(goTypeName, schema, allSchemas);
     }
 
     // Handle simple type aliases
@@ -342,6 +345,101 @@ export class GoGenerator {
     };
   }
 
+  /**
+   * Build a Go sum-type representation from an OpenAPI oneOf/anyOf schema.
+   *
+   * Emits a marker interface plus one implementing struct per variant. When
+   * `discriminator.propertyName` is present, the template additionally emits
+   * a wrapper type with a `UnmarshalJSON` that switches on the discriminator.
+   */
+  private createGoUnion(
+    name: string,
+    schema: SchemaObject,
+    allSchemas: Record<string, SchemaObject>
+  ): GeneratedType {
+    const kind: 'oneOf' | 'anyOf' =
+      'oneOf' in schema && (schema as any).oneOf ? 'oneOf' : 'anyOf';
+    const rawVariants = ((schema as any)[kind] as SchemaObject[]) || [];
+    const imports = new Set<string>();
+    const dependencies: string[] = [];
+
+    const discriminator = (schema as any).discriminator;
+    const discriminatorProperty: string | undefined = discriminator?.propertyName;
+    // mapping is `discriminatorValue -> schemaRef`; we need the reverse
+    // (variant title -> discriminatorValue) to annotate variants.
+    const mapping: Record<string, string> = discriminator?.mapping || {};
+    const reverseMapping: Record<string, string> = {};
+    for (const [value, ref] of Object.entries(mapping)) {
+      const refName = (ref as string).split('/').pop();
+      if (refName) reverseMapping[refName] = value;
+    }
+
+    const variants: GoUnionVariant[] = rawVariants.map((v, idx) => {
+      // If the variant still carries a title from a resolved $ref, use it.
+      // Otherwise synthesise `<Union>Variant<N>`.
+      const rawTitle = (v as any).title as string | undefined;
+      const variantBaseName = rawTitle ? toGoTypeName(rawTitle) : `${name}Variant${idx + 1}`;
+      const variantName = variantBaseName;
+
+      // Alias-style: variant is a bare scalar/array/alias (no properties).
+      if (v.type && v.type !== 'object' && !v.properties && !(v as any).allOf) {
+        const mapping = mapOpenAPITypeToGo(v);
+        mapping.imports.forEach((i) => imports.add(i));
+        return {
+          name: variantName,
+          fields: [],
+          aliasType: mapping.goType,
+          discriminatorValue: reverseMapping[variantBaseName] ?? rawTitle,
+          comment: generateComment(v),
+        };
+      }
+
+      // Struct-style: variant is an object with properties.
+      const fields: GoField[] = [];
+      const required = ((v.required as string[]) || []) as string[];
+      const props = (v.properties || {}) as Record<string, SchemaObject>;
+      for (const [fieldName, fieldSchema] of Object.entries(props)) {
+        const field = this.createGoField(
+          fieldName,
+          fieldSchema,
+          required.includes(fieldName),
+          allSchemas,
+          dependencies
+        );
+        fields.push(field);
+        field.imports?.forEach((i) => imports.add(i));
+      }
+
+      return {
+        name: variantName,
+        fields,
+        discriminatorValue: reverseMapping[variantBaseName] ?? rawTitle,
+        comment: generateComment(v),
+      };
+    });
+
+    if (discriminatorProperty) {
+      imports.add('encoding/json');
+      imports.add('fmt');
+    }
+
+    const union: GoUnion = {
+      name,
+      kind,
+      variants,
+      discriminatorProperty,
+      comment: generateComment(schema, name),
+      imports,
+    };
+
+    return {
+      type: 'union',
+      definition: union,
+      dependencies,
+      category: this.categorizeType(name, schema),
+    };
+  }
+
   private createGoField(
     name: string, 
     schema: SchemaObject, 
@@ -411,7 +509,7 @@ export class GoGenerator {
 
   private organizeSingleFile(types: GeneratedType[]): GeneratedFile[] {
     const imports = new Set<string>();
-    const typeContents: Array<{type: 'struct' | 'enum' | 'interface' | 'alias'; content: string}> = [];
+    const typeContents: Array<{type: 'struct' | 'enum' | 'interface' | 'alias' | 'union'; content: string}> = [];
 
     // Add fmt import if decoders are enabled
     if (this.options.generateDecoders) {
@@ -454,11 +552,16 @@ export class GoGenerator {
             );
           }
           break;
+        case 'union':
+          const union = type.definition as GoUnion;
+          content = generateUnionTemplate(union);
+          union.imports?.forEach(imp => imports.add(imp));
+          break;
         default:
           continue;
       }
 
-      typeContents.push({ type: type.type as 'struct' | 'enum' | 'interface' | 'alias', content });
+      typeContents.push({ type: type.type as 'struct' | 'enum' | 'interface' | 'alias' | 'union', content });
     }
 
     const fileContent = generateGoFile(
@@ -511,7 +614,7 @@ export class GoGenerator {
     const files: GeneratedFile[] = [];
 
     for (const [filename, fileInfo] of fileMap) {
-      const typeContents: Array<{type: 'struct' | 'enum' | 'interface' | 'alias'; content: string}> = [];
+      const typeContents: Array<{type: 'struct' | 'enum' | 'interface' | 'alias' | 'union'; content: string}> = [];
 
       // Add validator import if validation is enabled and file has decoders
       if (this.options.generateValidation && this.options.generateDecoders) {
@@ -549,11 +652,16 @@ export class GoGenerator {
               );
             }
             break;
+          case 'union':
+            const union = type.definition as GoUnion;
+            content = generateUnionTemplate(union);
+            union.imports?.forEach((imp) => fileInfo.imports.add(imp));
+            break;
           default:
             continue;
         }
 
-        typeContents.push({ type: type.type as 'struct' | 'enum' | 'interface' | 'alias', content });
+        typeContents.push({ type: type.type as 'struct' | 'enum' | 'interface' | 'alias' | 'union', content });
       }
 
       if (typeContents.length > 0) {

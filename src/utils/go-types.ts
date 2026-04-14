@@ -48,6 +48,30 @@ export interface GoInterface {
   comment?: string;
 }
 
+/**
+ * Represents a Go sum-type (discriminated union) generated from
+ * OpenAPI `oneOf` / `anyOf`. Emits a marker interface plus one
+ * implementing struct per variant, and optionally a wrapper with a
+ * custom `UnmarshalJSON` when a discriminator is defined.
+ */
+export interface GoUnionVariant {
+  name: string;                           // Go struct name for variant
+  fields: GoField[];                      // Inline struct fields (empty if alias)
+  embeddedTypes?: string[];               // For $ref variants after resolution (usually empty)
+  aliasType?: string;                     // If variant is a scalar/alias, the underlying Go type
+  discriminatorValue?: string;            // Value of discriminator.propertyName for this variant
+  comment?: string;
+}
+
+export interface GoUnion {
+  name: string;                           // Marker interface name (e.g. Pet)
+  kind: 'oneOf' | 'anyOf';
+  variants: GoUnionVariant[];
+  discriminatorProperty?: string;         // Name of the JSON field used to switch
+  comment?: string;
+  imports?: Set<string>;
+}
+
 export interface GoDecoder {
   name: string;              // e.g., "parseUser"
   typeName: string;          // e.g., "User"
@@ -57,8 +81,8 @@ export interface GoDecoder {
 }
 
 export interface GeneratedType {
-  type: 'struct' | 'enum' | 'interface' | 'alias';
-  definition: GoStruct | GoEnum | GoInterface | GoType;
+  type: 'struct' | 'enum' | 'interface' | 'alias' | 'union';
+  definition: GoStruct | GoEnum | GoInterface | GoType | GoUnion;
   dependencies: string[];
   category: 'model' | 'enum' | 'request' | 'response' | 'common';
   decoder?: GoDecoder;       // Optional decoder function

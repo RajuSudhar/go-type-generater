@@ -1,4 +1,4 @@
-import { GoStruct, GoEnum, GoField, GoDecoder } from '../utils/go-types';
+import { GoStruct, GoEnum, GoField, GoDecoder, GoUnion } from '../utils/go-types';
 
 /**
  * Template for generating Go package header
@@ -224,7 +224,7 @@ export function generateGoFile(
   packageName: string,
   imports: string[],
   types: Array<{
-    type: 'struct' | 'enum' | 'interface' | 'alias';
+    type: 'struct' | 'enum' | 'interface' | 'alias' | 'union';
     content: string;
   }>,
   description?: string
@@ -238,6 +238,87 @@ export function generateGoFile(
     packageHeader,
     typeDefinitions
   ].filter(Boolean).join('\n\n'));
+}
+
+/**
+ * Template for generating a Go sum type from OpenAPI oneOf/anyOf.
+ *
+ * Emits:
+ *   - Marker interface `type <Union> interface { is<Union>() }`
+ *   - One struct per variant implementing the marker method
+ *   - If `discriminatorProperty` is set, a `<Union>Wrapper` with
+ *     `UnmarshalJSON` that switches on the discriminator field.
+ */
+export function generateUnionTemplate(u: GoUnion): string {
+  const commentLine = u.comment
+    ? `// ${u.name} ${u.comment}`
+    : `// ${u.name} is a sum type (${u.kind}) with ${u.variants.length} variant(s)`;
+
+  const markerMethod = `is${u.name}`;
+
+  const iface = `${commentLine}
+type ${u.name} interface {
+\t${markerMethod}()
+}`;
+
+  const variantBlocks = u.variants.map((v) => {
+    const variantComment = v.comment
+      ? `// ${v.name} ${v.comment}`
+      : `// ${v.name} is a variant of ${u.name}`;
+
+    let typeDef: string;
+    if (v.aliasType) {
+      typeDef = `type ${v.name} ${v.aliasType}`;
+    } else {
+      const embeds = (v.embeddedTypes || []).map((t) => `\t${t}`).join('\n');
+      const fields = v.fields.map((f) => `\t${f.goName} ${f.goType} ${f.tags}${f.comment ? ` // ${f.comment}` : ''}`).join('\n');
+      const body = [embeds, fields].filter(Boolean).join('\n');
+      typeDef = `type ${v.name} struct {
+${body}
+}`;
+    }
+
+    const markerImpl = `func (${v.name}) ${markerMethod}() {}`;
+    return `${variantComment}\n${typeDef}\n\n${markerImpl}`;
+  }).join('\n\n');
+
+  if (!u.discriminatorProperty) {
+    return `${iface}\n\n${variantBlocks}`;
+  }
+
+  // Emit discriminator wrapper + UnmarshalJSON
+  const wrapperName = `${u.name}Wrapper`;
+  const cases = u.variants.map((v) => {
+    const disc = v.discriminatorValue ?? v.name;
+    return `\tcase "${disc}":
+\t\tvar out ${v.name}
+\t\tif err := json.Unmarshal(data, &out); err != nil {
+\t\t\treturn err
+\t\t}
+\t\tw.Value = out
+\t\treturn nil`;
+  }).join('\n');
+
+  const wrapper = `// ${wrapperName} decodes ${u.name} based on the "${u.discriminatorProperty}" discriminator field.
+type ${wrapperName} struct {
+\tValue ${u.name}
+}
+
+func (w *${wrapperName}) UnmarshalJSON(data []byte) error {
+\tvar probe struct {
+\t\tKind string \`json:"${u.discriminatorProperty}"\`
+\t}
+\tif err := json.Unmarshal(data, &probe); err != nil {
+\t\treturn err
+\t}
+\tswitch probe.Kind {
+${cases}
+\tdefault:
+\t\treturn fmt.Errorf("${u.name}: unknown ${u.discriminatorProperty} %q", probe.Kind)
+\t}
+}`;
+
+  return `${iface}\n\n${variantBlocks}\n\n${wrapper}`;
 }
 
 /**

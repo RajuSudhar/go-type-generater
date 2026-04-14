@@ -1,0 +1,46 @@
+openapi: 3.0.3
+info:
+  title: Discriminated Union Test
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    Pet:
+      oneOf:
+        - title: Dog
+          type: object
+          required: [petType, bark]
+          properties:
+            petType:
+              type: string
+            bark:
+              type: string
+        - title: Cat
+          type: object
+          required: [petType, meow]
+          properties:
+            petType:
+              type: string
+            meow:
+              type: string
+      discriminator:
+        propertyName: petType
+        mapping:
+          dog: '#/components/schemas/Dog'
+          cat: '#/components/schemas/Cat'
+    Shape:
+      anyOf:
+        - title: Circle
+          type: object
+          properties:
+            radius:
+              type: number
+        - title: Square
+          type: object
+          properties:
+            side:
+              type: number
+    Scalar:
+      oneOf:
+        - type: string
+        - type: integer
