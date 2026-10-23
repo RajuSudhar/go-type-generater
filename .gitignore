@@ -46,3 +46,6 @@ yarn-error.log*
 *.pid
 *.seed
 *.pid.lock
+
+# keep project Claude context tracked (overrides global ignore)
+!.claude/
