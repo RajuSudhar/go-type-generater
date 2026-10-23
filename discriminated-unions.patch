@@ -1,0 +1,600 @@
+From 0baaa6ad088ae0650a062a06890edc938f86ab32 Mon Sep 17 00:00:00 2001
+From: Sudharsan <rajusudhar1616@gmail.com>
+Date: Tue, 14 Apr 2026 23:41:15 +0530
+Subject: [PATCH] feat(generator): add oneOf/anyOf discriminated union support
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Replace the silent `interface{}` fallback for OpenAPI `oneOf`/`anyOf`
+with an idiomatic Go sum-type representation:
+
+* New `GoUnion` / `GoUnionVariant` model in `src/utils/go-types.ts`
+  alongside a `'union'` variant on `GeneratedType`.
+* `generateUnionTemplate()` in `src/templates/go-templates.ts` emits
+  a marker interface, one struct per variant with a marker method
+  (`func (Variant) isUnion() {}`), and — when
+  `discriminator.propertyName` is present — a `<Union>Wrapper` with
+  `UnmarshalJSON` that switches on the discriminator value.
+* `createGoUnion()` in `src/generator/go-generator.ts` derives variant
+  names from `title` (or synthesizes `<Union>VariantN`), respects
+  `discriminator.mapping` to label cases, and threads `encoding/json`
+  + `fmt` imports automatically.
+* Wired `'union'` into both `single` and `category` file organizers.
+* New fixture `tests/fixtures/discriminated-union.yaml` covering
+  discriminated `oneOf`, plain `anyOf`, and scalar `oneOf` variants.
+* 6 new tests in `tests/generator/discriminated-unions.test.ts`
+  (suite total 121 tests).
+
+Why: `oneOf`/`anyOf` previously degraded to `interface{}`, losing
+type identity and forcing consumers to handle JSON dispatch by hand.
+This is the first slice of `feat-discriminated-unions` (Phase 2);
+remaining work — non-discriminated unmarshal dispatch, mapping when
+variant titles are absent, nested `oneOf` inside `allOf` — is tracked
+in the feature plan.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ TRACK.md                                      |  21 +--
+ .../phase-2/feat-discriminated-unions/PLAN.md |  23 +++-
+ src/generator/go-generator.ts                 | 122 +++++++++++++++++-
+ src/templates/go-templates.ts                 |  85 +++++++++++-
+ src/utils/go-types.ts                         |  28 +++-
+ tests/fixtures/discriminated-union.yaml       |  46 +++++++
+ tests/generator/discriminated-unions.test.ts  |  66 ++++++++++
+ 7 files changed, 365 insertions(+), 26 deletions(-)
+ create mode 100644 tests/fixtures/discriminated-union.yaml
+ create mode 100644 tests/generator/discriminated-unions.test.ts
+
+diff --git a/TRACK.md b/TRACK.md
+index 38ec034..fcc9018 100644
+--- a/TRACK.md
++++ b/TRACK.md
+@@ -43,14 +43,14 @@ Live status of features across phases. Source of truth for "what's done / what's
+ 
+ ### feat-discriminated-unions → docs/plans/phase-2/feat-discriminated-unions/PLAN.md
+ 
+-- [ ] Detect `oneOf`/`anyOf` in `convertSchemaToGoType()`
+-- [ ] Emit interface + implementing structs for discriminated unions
+-- [ ] Generate `UnmarshalJSON` switching on discriminator.propertyName
+-- [ ] Handle non-discriminated `oneOf` with wrapper struct
+-- [ ] Handle `anyOf` (subset logic)
+-- [ ] New template in `go-templates.ts` for union types
+-- [ ] Generated code compiles; round-trip test passes
+-- **Note**: Currently `oneOf`/`anyOf` → `interface{}` (placeholder)
++- [x] Detect `oneOf`/`anyOf` in `convertSchemaToGoType()`
++- [x] Emit interface + implementing structs for discriminated unions
++- [x] Generate `UnmarshalJSON` switching on discriminator.propertyName
++- [~] Handle non-discriminated `oneOf` with wrapper struct (marker interface only; no MarshalJSON yet)
++- [x] Handle `anyOf` (subset logic)
++- [x] New template in `go-templates.ts` for union types (`generateUnionTemplate`)
++- [ ] Generated code compiles; round-trip test passes (unit tests only; `go build` not automated)
++- **Note**: First slice shipped — marker interface + variant structs + discriminator unmarshal. Remaining: non-discriminated wrapper `MarshalJSON`, `discriminator.mapping` handling for non-title variants, nested oneOf/allOf.
+ 
+ ### feat-configurable-mappings → docs/plans/phase-2/feat-configurable-mappings/PLAN.md
+ 
+@@ -99,9 +99,10 @@ Live status of features across phases. Source of truth for "what's done / what's
+ 
+ ## Next Up (ordered)
+ 
+-1. ~~**Write test suite**~~ — Done: 115 tests across 5 suites
++1. ~~**Write test suite**~~ — Done: 121 tests across 6 suites
+ 2. ~~**Finish error types**~~ — Done: 4 custom error classes in `src/errors.ts`
+-3. **Implement discriminated unions** — Replace `interface{}` fallback for oneOf/anyOf with proper sum-type pattern
++3. ~~**Implement discriminated unions (first slice)**~~ — Done: marker interface + variants + discriminator `UnmarshalJSON`. Follow-ups tracked in the feature's PLAN.
+ 4. **Add CI integration tests** — Golden tests comparing generated output to expected .go files; run `go build` in CI
+ 5. **Configurable type mappings** — Add `-c, --config` flag and type mapping overrides
+ 6. **Validation methods** — Wire constructor, validator, and stringer generation flags
++7. **Complete union support** — Non-discriminated `MarshalJSON`, `discriminator.mapping` resolution, nested oneOf/allOf.
+diff --git a/docs/plans/phase-2/feat-discriminated-unions/PLAN.md b/docs/plans/phase-2/feat-discriminated-unions/PLAN.md
+index ae7fc9e..af65287 100644
+--- a/docs/plans/phase-2/feat-discriminated-unions/PLAN.md
++++ b/docs/plans/phase-2/feat-discriminated-unions/PLAN.md
+@@ -2,7 +2,7 @@
+ name: feat-discriminated-unions
+ description: Convert OpenAPI oneOf/anyOf with discriminator into proper Go sum-type representations
+ phase: 2
+-status: planned
++status: in-progress
+ owner: tbd
+ ---
+ 
+@@ -28,10 +28,23 @@ Replace the `interface{}` fallback for `oneOf`/`anyOf` with a Go idiom that pres
+ 5. Fixture + golden test
+ 
+ # Outputs / Acceptance
+-- [ ] Discriminated `oneOf` emits interface + structs + switching unmarshal
+-- [ ] Non-discriminated `oneOf` round-trips via wrapper
+-- [ ] `anyOf` handled (subset of `oneOf` logic)
+-- [ ] Generated code compiles; round-trip test passes
++- [x] Discriminated `oneOf` emits interface + structs + switching unmarshal
++- [~] Non-discriminated `oneOf` round-trips via wrapper — marker interface + variants emitted; dispatching `UnmarshalJSON` without discriminator still TODO
++- [x] `anyOf` handled (subset of `oneOf` logic)
++- [ ] Generated code compiles; round-trip test passes — unit-tested; `go build` CI check not yet wired
++
++# Progress notes (2026-04-13)
++Shipped first slice in `feature/add-discriminated-unions`:
++- `GoUnion` + `GoUnionVariant` types in `src/utils/go-types.ts`
++- `generateUnionTemplate()` in `src/templates/go-templates.ts`
++- `createGoUnion()` in `src/generator/go-generator.ts`, wired into both `single` and `category` file organizers
++- 6 new tests in `tests/generator/discriminated-unions.test.ts` (fixture `tests/fixtures/discriminated-union.yaml`)
++
++Remaining work:
++- Non-discriminated unmarshal dispatch (try each variant until one parses)
++- `discriminator.mapping` when variant titles are absent (requires preserving ref names through resolver or consulting mapping during generation)
++- Nested `oneOf` inside `allOf`
++- `go build` verification in CI
+ 
+ # Refs
+ - `claude-ref/type-mappings.md`
+diff --git a/src/generator/go-generator.ts b/src/generator/go-generator.ts
+index bb69940..896eb6e 100644
+--- a/src/generator/go-generator.ts
++++ b/src/generator/go-generator.ts
+@@ -8,6 +8,8 @@ import {
+   GoEnum,
+   GoField,
+   GoDecoder,
++  GoUnion,
++  GoUnionVariant,
+   toGoTypeName,
+   toGoFieldName,
+   toParserFunctionName,
+@@ -22,7 +24,8 @@ import {
+   generateGoModTemplate,
+   generateMainExportTemplate,
+   generateDecoderTemplate,
+-  generateDecoderHelpersTemplate
++  generateDecoderHelpersTemplate,
++  generateUnionTemplate
+ } from '../templates/go-templates';
+ 
+ export interface GeneratorOptions {
+@@ -161,9 +164,9 @@ export class GoGenerator {
+       return this.createGoStructFromAllOf(goTypeName, schema as SchemaObject & { allOf: any[] }, allSchemas, dependencies);
+     }
+ 
+-    // Handle oneOf/anyOf (interfaces)
++    // Handle oneOf/anyOf (sum types / discriminated unions)
+     if (('oneOf' in schema && schema.oneOf) || ('anyOf' in schema && schema.anyOf)) {
+-      return this.createGoInterface(goTypeName, schema);
++      return this.createGoUnion(goTypeName, schema, allSchemas);
+     }
+ 
+     // Handle simple type aliases
+@@ -342,6 +345,101 @@ export class GoGenerator {
+     };
+   }
+ 
++  /**
++   * Build a Go sum-type representation from an OpenAPI oneOf/anyOf schema.
++   *
++   * Emits a marker interface plus one implementing struct per variant. When
++   * `discriminator.propertyName` is present, the template additionally emits
++   * a wrapper type with a `UnmarshalJSON` that switches on the discriminator.
++   */
++  private createGoUnion(
++    name: string,
++    schema: SchemaObject,
++    allSchemas: Record<string, SchemaObject>
++  ): GeneratedType {
++    const kind: 'oneOf' | 'anyOf' =
++      'oneOf' in schema && (schema as any).oneOf ? 'oneOf' : 'anyOf';
++    const rawVariants = ((schema as any)[kind] as SchemaObject[]) || [];
++    const imports = new Set<string>();
++    const dependencies: string[] = [];
++
++    const discriminator = (schema as any).discriminator;
++    const discriminatorProperty: string | undefined = discriminator?.propertyName;
++    // mapping is `discriminatorValue -> schemaRef`; we need the reverse
++    // (variant title -> discriminatorValue) to annotate variants.
++    const mapping: Record<string, string> = discriminator?.mapping || {};
++    const reverseMapping: Record<string, string> = {};
++    for (const [value, ref] of Object.entries(mapping)) {
++      const refName = (ref as string).split('/').pop();
++      if (refName) reverseMapping[refName] = value;
++    }
++
++    const variants: GoUnionVariant[] = rawVariants.map((v, idx) => {
++      // If the variant still carries a title from a resolved $ref, use it.
++      // Otherwise synthesise `<Union>Variant<N>`.
++      const rawTitle = (v as any).title as string | undefined;
++      const variantBaseName = rawTitle ? toGoTypeName(rawTitle) : `${name}Variant${idx + 1}`;
++      const variantName = variantBaseName;
++
++      // Alias-style: variant is a bare scalar/array/alias (no properties).
++      if (v.type && v.type !== 'object' && !v.properties && !(v as any).allOf) {
++        const mapping = mapOpenAPITypeToGo(v);
++        mapping.imports.forEach((i) => imports.add(i));
++        return {
++          name: variantName,
++          fields: [],
++          aliasType: mapping.goType,
++          discriminatorValue: reverseMapping[variantBaseName] ?? rawTitle,
++          comment: generateComment(v),
++        };
++      }
++
++      // Struct-style: variant is an object with properties.
++      const fields: GoField[] = [];
++      const required = ((v.required as string[]) || []) as string[];
++      const props = (v.properties || {}) as Record<string, SchemaObject>;
++      for (const [fieldName, fieldSchema] of Object.entries(props)) {
++        const field = this.createGoField(
++          fieldName,
++          fieldSchema,
++          required.includes(fieldName),
++          allSchemas,
++          dependencies
++        );
++        fields.push(field);
++        field.imports?.forEach((i) => imports.add(i));
++      }
++
++      return {
++        name: variantName,
++        fields,
++        discriminatorValue: reverseMapping[variantBaseName] ?? rawTitle,
++        comment: generateComment(v),
++      };
++    });
++
++    if (discriminatorProperty) {
++      imports.add('encoding/json');
++      imports.add('fmt');
++    }
++
++    const union: GoUnion = {
++      name,
++      kind,
++      variants,
++      discriminatorProperty,
++      comment: generateComment(schema, name),
++      imports,
++    };
++
++    return {
++      type: 'union',
++      definition: union,
++      dependencies,
++      category: this.categorizeType(name, schema),
++    };
++  }
++
+   private createGoField(
+     name: string, 
+     schema: SchemaObject, 
+@@ -411,7 +509,7 @@ export class GoGenerator {
+ 
+   private organizeSingleFile(types: GeneratedType[]): GeneratedFile[] {
+     const imports = new Set<string>();
+-    const typeContents: Array<{type: 'struct' | 'enum' | 'interface' | 'alias'; content: string}> = [];
++    const typeContents: Array<{type: 'struct' | 'enum' | 'interface' | 'alias' | 'union'; content: string}> = [];
+ 
+     // Add fmt import if decoders are enabled
+     if (this.options.generateDecoders) {
+@@ -454,11 +552,16 @@ export class GoGenerator {
+             );
+           }
+           break;
++        case 'union':
++          const union = type.definition as GoUnion;
++          content = generateUnionTemplate(union);
++          union.imports?.forEach(imp => imports.add(imp));
++          break;
+         default:
+           continue;
+       }
+ 
+-      typeContents.push({ type: type.type as 'struct' | 'enum' | 'interface' | 'alias', content });
++      typeContents.push({ type: type.type as 'struct' | 'enum' | 'interface' | 'alias' | 'union', content });
+     }
+ 
+     const fileContent = generateGoFile(
+@@ -511,7 +614,7 @@ export class GoGenerator {
+     const files: GeneratedFile[] = [];
+ 
+     for (const [filename, fileInfo] of fileMap) {
+-      const typeContents: Array<{type: 'struct' | 'enum' | 'interface' | 'alias'; content: string}> = [];
++      const typeContents: Array<{type: 'struct' | 'enum' | 'interface' | 'alias' | 'union'; content: string}> = [];
+ 
+       // Add validator import if validation is enabled and file has decoders
+       if (this.options.generateValidation && this.options.generateDecoders) {
+@@ -549,11 +652,16 @@ export class GoGenerator {
+               );
+             }
+             break;
++          case 'union':
++            const union = type.definition as GoUnion;
++            content = generateUnionTemplate(union);
++            union.imports?.forEach((imp) => fileInfo.imports.add(imp));
++            break;
+           default:
+             continue;
+         }
+ 
+-        typeContents.push({ type: type.type as 'struct' | 'enum' | 'interface' | 'alias', content });
++        typeContents.push({ type: type.type as 'struct' | 'enum' | 'interface' | 'alias' | 'union', content });
+       }
+ 
+       if (typeContents.length > 0) {
+diff --git a/src/templates/go-templates.ts b/src/templates/go-templates.ts
+index 3870f4a..4091bc7 100644
+--- a/src/templates/go-templates.ts
++++ b/src/templates/go-templates.ts
+@@ -1,4 +1,4 @@
+-import { GoStruct, GoEnum, GoField, GoDecoder } from '../utils/go-types';
++import { GoStruct, GoEnum, GoField, GoDecoder, GoUnion } from '../utils/go-types';
+ 
+ /**
+  * Template for generating Go package header
+@@ -224,7 +224,7 @@ export function generateGoFile(
+   packageName: string,
+   imports: string[],
+   types: Array<{
+-    type: 'struct' | 'enum' | 'interface' | 'alias';
++    type: 'struct' | 'enum' | 'interface' | 'alias' | 'union';
+     content: string;
+   }>,
+   description?: string
+@@ -240,6 +240,87 @@ export function generateGoFile(
+   ].filter(Boolean).join('\n\n'));
+ }
+ 
++/**
++ * Template for generating a Go sum type from OpenAPI oneOf/anyOf.
++ *
++ * Emits:
++ *   - Marker interface `type <Union> interface { is<Union>() }`
++ *   - One struct per variant implementing the marker method
++ *   - If `discriminatorProperty` is set, a `<Union>Wrapper` with
++ *     `UnmarshalJSON` that switches on the discriminator field.
++ */
++export function generateUnionTemplate(u: GoUnion): string {
++  const commentLine = u.comment
++    ? `// ${u.name} ${u.comment}`
++    : `// ${u.name} is a sum type (${u.kind}) with ${u.variants.length} variant(s)`;
++
++  const markerMethod = `is${u.name}`;
++
++  const iface = `${commentLine}
++type ${u.name} interface {
++\t${markerMethod}()
++}`;
++
++  const variantBlocks = u.variants.map((v) => {
++    const variantComment = v.comment
++      ? `// ${v.name} ${v.comment}`
++      : `// ${v.name} is a variant of ${u.name}`;
++
++    let typeDef: string;
++    if (v.aliasType) {
++      typeDef = `type ${v.name} ${v.aliasType}`;
++    } else {
++      const embeds = (v.embeddedTypes || []).map((t) => `\t${t}`).join('\n');
++      const fields = v.fields.map((f) => `\t${f.goName} ${f.goType} ${f.tags}${f.comment ? ` // ${f.comment}` : ''}`).join('\n');
++      const body = [embeds, fields].filter(Boolean).join('\n');
++      typeDef = `type ${v.name} struct {
++${body}
++}`;
++    }
++
++    const markerImpl = `func (${v.name}) ${markerMethod}() {}`;
++    return `${variantComment}\n${typeDef}\n\n${markerImpl}`;
++  }).join('\n\n');
++
++  if (!u.discriminatorProperty) {
++    return `${iface}\n\n${variantBlocks}`;
++  }
++
++  // Emit discriminator wrapper + UnmarshalJSON
++  const wrapperName = `${u.name}Wrapper`;
++  const cases = u.variants.map((v) => {
++    const disc = v.discriminatorValue ?? v.name;
++    return `\tcase "${disc}":
++\t\tvar out ${v.name}
++\t\tif err := json.Unmarshal(data, &out); err != nil {
++\t\t\treturn err
++\t\t}
++\t\tw.Value = out
++\t\treturn nil`;
++  }).join('\n');
++
++  const wrapper = `// ${wrapperName} decodes ${u.name} based on the "${u.discriminatorProperty}" discriminator field.
++type ${wrapperName} struct {
++\tValue ${u.name}
++}
++
++func (w *${wrapperName}) UnmarshalJSON(data []byte) error {
++\tvar probe struct {
++\t\tKind string \`json:"${u.discriminatorProperty}"\`
++\t}
++\tif err := json.Unmarshal(data, &probe); err != nil {
++\t\treturn err
++\t}
++\tswitch probe.Kind {
++${cases}
++\tdefault:
++\t\treturn fmt.Errorf("${u.name}: unknown ${u.discriminatorProperty} %q", probe.Kind)
++\t}
++}`;
++
++  return `${iface}\n\n${variantBlocks}\n\n${wrapper}`;
++}
++
+ /**
+  * Template for generating decoder function
+  */
+diff --git a/src/utils/go-types.ts b/src/utils/go-types.ts
+index b15f970..38f15e4 100644
+--- a/src/utils/go-types.ts
++++ b/src/utils/go-types.ts
+@@ -48,6 +48,30 @@ export interface GoInterface {
+   comment?: string;
+ }
+ 
++/**
++ * Represents a Go sum-type (discriminated union) generated from
++ * OpenAPI `oneOf` / `anyOf`. Emits a marker interface plus one
++ * implementing struct per variant, and optionally a wrapper with a
++ * custom `UnmarshalJSON` when a discriminator is defined.
++ */
++export interface GoUnionVariant {
++  name: string;                           // Go struct name for variant
++  fields: GoField[];                      // Inline struct fields (empty if alias)
++  embeddedTypes?: string[];               // For $ref variants after resolution (usually empty)
++  aliasType?: string;                     // If variant is a scalar/alias, the underlying Go type
++  discriminatorValue?: string;            // Value of discriminator.propertyName for this variant
++  comment?: string;
++}
++
++export interface GoUnion {
++  name: string;                           // Marker interface name (e.g. Pet)
++  kind: 'oneOf' | 'anyOf';
++  variants: GoUnionVariant[];
++  discriminatorProperty?: string;         // Name of the JSON field used to switch
++  comment?: string;
++  imports?: Set<string>;
++}
++
+ export interface GoDecoder {
+   name: string;              // e.g., "parseUser"
+   typeName: string;          // e.g., "User"
+@@ -57,8 +81,8 @@ export interface GoDecoder {
+ }
+ 
+ export interface GeneratedType {
+-  type: 'struct' | 'enum' | 'interface' | 'alias';
+-  definition: GoStruct | GoEnum | GoInterface | GoType;
++  type: 'struct' | 'enum' | 'interface' | 'alias' | 'union';
++  definition: GoStruct | GoEnum | GoInterface | GoType | GoUnion;
+   dependencies: string[];
+   category: 'model' | 'enum' | 'request' | 'response' | 'common';
+   decoder?: GoDecoder;       // Optional decoder function
+diff --git a/tests/fixtures/discriminated-union.yaml b/tests/fixtures/discriminated-union.yaml
+new file mode 100644
+index 0000000..c4dcd0f
+--- /dev/null
++++ b/tests/fixtures/discriminated-union.yaml
+@@ -0,0 +1,46 @@
++openapi: 3.0.3
++info:
++  title: Discriminated Union Test
++  version: 1.0.0
++paths: {}
++components:
++  schemas:
++    Pet:
++      oneOf:
++        - title: Dog
++          type: object
++          required: [petType, bark]
++          properties:
++            petType:
++              type: string
++            bark:
++              type: string
++        - title: Cat
++          type: object
++          required: [petType, meow]
++          properties:
++            petType:
++              type: string
++            meow:
++              type: string
++      discriminator:
++        propertyName: petType
++        mapping:
++          dog: '#/components/schemas/Dog'
++          cat: '#/components/schemas/Cat'
++    Shape:
++      anyOf:
++        - title: Circle
++          type: object
++          properties:
++            radius:
++              type: number
++        - title: Square
++          type: object
++          properties:
++            side:
++              type: number
++    Scalar:
++      oneOf:
++        - type: string
++        - type: integer
+diff --git a/tests/generator/discriminated-unions.test.ts b/tests/generator/discriminated-unions.test.ts
+new file mode 100644
+index 0000000..789fe3a
+--- /dev/null
++++ b/tests/generator/discriminated-unions.test.ts
+@@ -0,0 +1,66 @@
++import { resolve } from 'path';
++import { existsSync, readFileSync, mkdirSync, rmSync } from 'fs';
++import { GoGenerator } from '../../src/generator/go-generator';
++import { OpenAPIParser } from '../../src/parser/openapi-parser';
++
++const FIXTURES = resolve(__dirname, '../fixtures');
++const TMP_OUT = resolve('/tmp', 'go-type-gen-union-test-output');
++
++describe('GoGenerator — discriminated unions', () => {
++  let parser: OpenAPIParser;
++  let typesContent: string;
++
++  beforeAll(async () => {
++    parser = new OpenAPIParser();
++    if (existsSync(TMP_OUT)) rmSync(TMP_OUT, { recursive: true });
++    mkdirSync(TMP_OUT, { recursive: true });
++
++    const doc = await parser.parse(resolve(FIXTURES, 'discriminated-union.yaml'));
++    const gen = new GoGenerator({ packageName: 'testpkg', grouping: 'single' });
++    await gen.generate(doc, TMP_OUT);
++    typesContent = readFileSync(resolve(TMP_OUT, 'types.go'), 'utf8');
++  });
++
++  afterAll(() => {
++    if (existsSync(TMP_OUT)) rmSync(TMP_OUT, { recursive: true });
++  });
++
++  it('emits a marker interface for oneOf', () => {
++    expect(typesContent).toMatch(/type Pet interface \{/);
++    expect(typesContent).toContain('isPet()');
++  });
++
++  it('emits a struct per discriminated variant using the title', () => {
++    expect(typesContent).toMatch(/type Dog struct \{/);
++    expect(typesContent).toMatch(/type Cat struct \{/);
++  });
++
++  it('emits marker method implementations on every variant', () => {
++    expect(typesContent).toContain('func (Dog) isPet()');
++    expect(typesContent).toContain('func (Cat) isPet()');
++  });
++
++  it('emits UnmarshalJSON wrapper when discriminator.propertyName is present', () => {
++    expect(typesContent).toContain('type PetWrapper struct');
++    expect(typesContent).toContain('func (w *PetWrapper) UnmarshalJSON(data []byte) error');
++    expect(typesContent).toContain('case "dog":');
++    expect(typesContent).toContain('case "cat":');
++    expect(typesContent).toContain('encoding/json');
++  });
++
++  it('handles anyOf without discriminator (no wrapper emitted)', () => {
++    expect(typesContent).toMatch(/type Shape interface \{/);
++    expect(typesContent).toContain('isShape()');
++    expect(typesContent).toMatch(/type Circle struct \{/);
++    expect(typesContent).toMatch(/type Square struct \{/);
++    expect(typesContent).not.toContain('ShapeWrapper');
++  });
++
++  it('falls back to synthesized names for scalar oneOf variants', () => {
++    expect(typesContent).toMatch(/type Scalar interface \{/);
++    expect(typesContent).toContain('type ScalarVariant1 string');
++    expect(typesContent).toContain('type ScalarVariant2 int');
++    expect(typesContent).toContain('func (ScalarVariant1) isScalar()');
++    expect(typesContent).toContain('func (ScalarVariant2) isScalar()');
++  });
++});
+-- 
+2.34.1
+
