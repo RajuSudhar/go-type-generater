@@ -43,14 +43,14 @@ Live status of features across phases. Source of truth for "what's done / what's
 
 ### feat-discriminated-unions → docs/plans/phase-2/feat-discriminated-unions/PLAN.md
 
-- [ ] Detect `oneOf`/`anyOf` in `convertSchemaToGoType()`
-- [ ] Emit interface + implementing structs for discriminated unions
-- [ ] Generate `UnmarshalJSON` switching on discriminator.propertyName
-- [ ] Handle non-discriminated `oneOf` with wrapper struct
-- [ ] Handle `anyOf` (subset logic)
-- [ ] New template in `go-templates.ts` for union types
-- [ ] Generated code compiles; round-trip test passes
-- **Note**: Currently `oneOf`/`anyOf` → `interface{}` (placeholder)
+- [x] Detect `oneOf`/`anyOf` in `convertSchemaToGoType()`
+- [x] Emit interface + implementing structs for discriminated unions
+- [x] Generate `UnmarshalJSON` switching on discriminator.propertyName
+- [~] Handle non-discriminated `oneOf` with wrapper struct (marker interface only; no MarshalJSON yet)
+- [x] Handle `anyOf` (subset logic)
+- [x] New template in `go-templates.ts` for union types (`generateUnionTemplate`)
+- [ ] Generated code compiles; round-trip test passes (unit tests only; `go build` not automated)
+- **Note**: First slice shipped — marker interface + variant structs + discriminator unmarshal. Remaining: non-discriminated wrapper `MarshalJSON`, `discriminator.mapping` handling for non-title variants, nested oneOf/allOf.
 
 ### feat-configurable-mappings → docs/plans/phase-2/feat-configurable-mappings/PLAN.md
 
@@ -99,9 +99,10 @@ Live status of features across phases. Source of truth for "what's done / what's
 
 ## Next Up (ordered)
 
-1. ~~**Write test suite**~~ — Done: 115 tests across 5 suites
+1. ~~**Write test suite**~~ — Done: 121 tests across 6 suites
 2. ~~**Finish error types**~~ — Done: 4 custom error classes in `src/errors.ts`
-3. **Implement discriminated unions** — Replace `interface{}` fallback for oneOf/anyOf with proper sum-type pattern
+3. ~~**Implement discriminated unions (first slice)**~~ — Done: marker interface + variants + discriminator `UnmarshalJSON`. Follow-ups tracked in the feature's PLAN.
 4. **Add CI integration tests** — Golden tests comparing generated output to expected .go files; run `go build` in CI
 5. **Configurable type mappings** — Add `-c, --config` flag and type mapping overrides
 6. **Validation methods** — Wire constructor, validator, and stringer generation flags
+7. **Complete union support** — Non-discriminated `MarshalJSON`, `discriminator.mapping` resolution, nested oneOf/allOf.

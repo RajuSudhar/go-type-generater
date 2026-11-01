@@ -2,7 +2,7 @@
 name: feat-discriminated-unions
 description: Convert OpenAPI oneOf/anyOf with discriminator into proper Go sum-type representations
 phase: 2
-status: planned
+status: in-progress
 owner: tbd
 ---
 
@@ -28,10 +28,23 @@ Replace the `interface{}` fallback for `oneOf`/`anyOf` with a Go idiom that pres
 5. Fixture + golden test
 
 # Outputs / Acceptance
-- [ ] Discriminated `oneOf` emits interface + structs + switching unmarshal
-- [ ] Non-discriminated `oneOf` round-trips via wrapper
-- [ ] `anyOf` handled (subset of `oneOf` logic)
-- [ ] Generated code compiles; round-trip test passes
+- [x] Discriminated `oneOf` emits interface + structs + switching unmarshal
+- [~] Non-discriminated `oneOf` round-trips via wrapper — marker interface + variants emitted; dispatching `UnmarshalJSON` without discriminator still TODO
+- [x] `anyOf` handled (subset of `oneOf` logic)
+- [ ] Generated code compiles; round-trip test passes — unit-tested; `go build` CI check not yet wired
+
+# Progress notes (2026-04-13)
+Shipped first slice in `feature/add-discriminated-unions`:
+- `GoUnion` + `GoUnionVariant` types in `src/utils/go-types.ts`
+- `generateUnionTemplate()` in `src/templates/go-templates.ts`
+- `createGoUnion()` in `src/generator/go-generator.ts`, wired into both `single` and `category` file organizers
+- 6 new tests in `tests/generator/discriminated-unions.test.ts` (fixture `tests/fixtures/discriminated-union.yaml`)
+
+Remaining work:
+- Non-discriminated unmarshal dispatch (try each variant until one parses)
+- `discriminator.mapping` when variant titles are absent (requires preserving ref names through resolver or consulting mapping during generation)
+- Nested `oneOf` inside `allOf`
+- `go build` verification in CI
 
 # Refs
 - `claude-ref/type-mappings.md`
